@@ -531,3 +531,49 @@ fn join_full_circle_panics() {
     let d = Address::generate(&f.env);
     f.client.join(&id, &d);
 }
+
+// ---- Status and membership guards -----------------------------------------
+
+fn complete_circle(f: &Fixture, id: u32) {
+    for _ in 0..3u32 {
+        for m in f.members.iter() {
+            f.client.contribute(&id, m);
+        }
+        f.client.settle_cycle(&id);
+    }
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn join_active_circle_panics_bad_status() {
+    let f = setup();
+    let id = create_full_circle(&f);
+    assert_eq!(f.client.get_circle(&id).status, CircleStatus::Active);
+    let d = Address::generate(&f.env);
+    f.client.join(&id, &d);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn join_completed_circle_panics_bad_status() {
+    let f = setup();
+    let id = create_full_circle(&f);
+    complete_circle(&f, id);
+    assert_eq!(f.client.get_circle(&id).status, CircleStatus::Completed);
+    let d = Address::generate(&f.env);
+    f.client.join(&id, &d);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn join_cancelled_circle_panics_bad_status() {
+    let f = setup();
+    let a = &f.members[0];
+    let id = f
+        .client
+        .create_circle(a, &f.token.address, &CONTRIB, &DEPOSIT, &3, &PERIOD);
+    f.client.cancel(&id, a);
+    assert_eq!(f.client.get_circle(&id).status, CircleStatus::Cancelled);
+    let d = Address::generate(&f.env);
+    f.client.join(&id, &d);
+}
