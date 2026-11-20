@@ -27,6 +27,10 @@
 * [Build and test](building/build-and-test.md)
 * [Deploy to testnet](building/deploy.md)
 
+## 🤖 Operating
+
+* [Settling cycles (keeper guide)](keeper.md)
+
 ## 🤝 Contributing
 
 * [Contributing](contributing.md)
