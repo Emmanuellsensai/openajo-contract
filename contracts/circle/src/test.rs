@@ -593,3 +593,15 @@ fn cancel_active_circle_panics_bad_status() {
     let id = create_full_circle(&f);
     f.client.cancel(&id, &f.members[0]);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn leave_by_non_member_panics_not_member() {
+    let f = setup();
+    let a = &f.members[0];
+    let id = f
+        .client
+        .create_circle(a, &f.token.address, &CONTRIB, &DEPOSIT, &3, &PERIOD);
+    let outsider = Address::generate(&f.env);
+    f.client.leave(&id, &outsider);
+}
