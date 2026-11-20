@@ -577,3 +577,19 @@ fn join_cancelled_circle_panics_bad_status() {
     let d = Address::generate(&f.env);
     f.client.join(&id, &d);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn leave_active_circle_panics_bad_status() {
+    let f = setup();
+    let id = create_full_circle(&f);
+    f.client.leave(&id, &f.members[1]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn cancel_active_circle_panics_bad_status() {
+    let f = setup();
+    let id = create_full_circle(&f);
+    f.client.cancel(&id, &f.members[0]);
+}
