@@ -106,6 +106,40 @@ fn full_lifecycle_3_members_3_cycles() {
     assert_eq!(f.token.balance(&f.client.address), 0);
 }
 
+#[test]
+fn completion_records_ended_at() {
+    let f = setup();
+    f.env.ledger().with_mut(|l| l.timestamp = 10_000);
+    let id = create_full_circle(&f);
+    let circle = f.client.get_circle(&id);
+    assert_eq!(circle.started_at, 10_000);
+    assert_eq!(circle.ended_at, 0);
+
+    for _cycle in 0..2u32 {
+        for m in f.members.iter() {
+            f.client.contribute(&id, m);
+        }
+        f.client.settle_cycle(&id);
+        assert_eq!(f.client.get_circle(&id).ended_at, 0);
+    }
+
+    // The final settlement happens before the last deadline.
+    let settled_at = 10_000 + 2 * PERIOD + 7;
+    f.env.ledger().with_mut(|l| l.timestamp = settled_at);
+    for m in f.members.iter() {
+        f.client.contribute(&id, m);
+    }
+    f.client.settle_cycle(&id);
+
+    let circle = f.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Completed);
+    assert_eq!(circle.ended_at, settled_at);
+    for m in f.members.iter() {
+        assert_eq!(f.token.balance(m), 1_000);
+    }
+    assert_eq!(f.token.balance(&f.client.address), 0);
+}
+
 // ---- Slashing and defaults ------------------------------------------------
 
 #[test]
@@ -168,6 +202,47 @@ fn insufficient_deposit_marks_default_and_skips_rotation() {
 }
 
 #[test]
+fn slashed_total_accumulates_across_cycles() {
+    let f = setup();
+    let [a, b, c] = &f.members;
+    let id = create_full_circle(&f);
+    assert_eq!(f.client.get_circle(&id).slashed_total, 0);
+
+    // Cycle 0: everyone pays, nothing slashed; a receives 300.
+    for m in f.members.iter() {
+        f.client.contribute(&id, m);
+    }
+    f.client.settle_cycle(&id);
+    assert_eq!(f.client.get_circle(&id).slashed_total, 0);
+
+    // Cycle 1: c misses and is slashed 100 of 150; b receives 300.
+    f.client.contribute(&id, a);
+    f.client.contribute(&id, b);
+    advance_past_deadline(&f, id);
+    f.client.settle_cycle(&id);
+    assert_eq!(f.client.get_circle(&id).slashed_total, CONTRIB);
+
+    // Cycle 2: c misses again; the last 50 is slashed and c defaults. a and
+    // b have both received, so the 250 pot goes back to them, 125 each.
+    f.client.contribute(&id, a);
+    f.client.contribute(&id, b);
+    advance_past_deadline(&f, id);
+    f.client.settle_cycle(&id);
+
+    let circle = f.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Completed);
+    assert_eq!(circle.slashed_total, DEPOSIT);
+    assert_eq!(f.client.get_member(&id, c).deposit_remaining, 0);
+
+    // Exact balances: a: -150 -300 +300 +125 +150 = +125;
+    // b: -150 -300 +300 +125 +150 = +125; c: -150 -100 = -250.
+    assert_eq!(f.token.balance(a), 1_125);
+    assert_eq!(f.token.balance(b), 1_125);
+    assert_eq!(f.token.balance(c), 750);
+    assert_eq!(f.token.balance(&f.client.address), 0);
+}
+
+#[test]
 fn recipient_defaults_after_receiving_loses_deposit() {
     let f = setup();
     let [a, b, c] = &f.members;
@@ -220,6 +295,55 @@ fn leave_refunds_and_cancel_refunds_all() {
     f.client.cancel(&id, a);
     assert_eq!(f.client.get_circle(&id).status, CircleStatus::Cancelled);
     assert_eq!(f.token.balance(a), 1_000);
+    assert_eq!(f.token.balance(c), 1_000);
+    assert_eq!(f.token.balance(&f.client.address), 0);
+}
+
+#[test]
+fn cancel_records_ended_at() {
+    let f = setup();
+    let [a, b, _] = &f.members;
+    f.env.ledger().with_mut(|l| l.timestamp = 5_000);
+    let id = f
+        .client
+        .create_circle(a, &f.token.address, &CONTRIB, &DEPOSIT, &3, &PERIOD);
+    f.client.join(&id, b);
+    assert_eq!(f.client.get_circle(&id).ended_at, 0);
+
+    f.env.ledger().with_mut(|l| l.timestamp = 6_000);
+    f.client.cancel(&id, a);
+
+    let circle = f.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Cancelled);
+    assert_eq!(circle.started_at, 0);
+    assert_eq!(circle.ended_at, 6_000);
+    assert_eq!(f.token.balance(a), 1_000);
+    assert_eq!(f.token.balance(b), 1_000);
+    assert_eq!(f.token.balance(&f.client.address), 0);
+}
+
+#[test]
+fn cancel_zeroes_refunded_deposits() {
+    let f = setup();
+    let [a, b, c] = &f.members;
+    let id = f
+        .client
+        .create_circle(a, &f.token.address, &CONTRIB, &DEPOSIT, &3, &PERIOD);
+    f.client.join(&id, b);
+    assert_eq!(f.client.get_member(&id, a).deposit_remaining, DEPOSIT);
+    assert_eq!(f.client.get_member(&id, b).deposit_remaining, DEPOSIT);
+    assert_eq!(f.token.balance(&f.client.address), 2 * DEPOSIT);
+
+    f.client.cancel(&id, a);
+
+    // Every refunded member's record now shows nothing left in escrow.
+    for m in [a, b] {
+        let st = f.client.get_member(&id, m);
+        assert_eq!(st.deposit_remaining, 0);
+        assert!(!st.received);
+        assert!(!st.defaulted);
+        assert_eq!(f.token.balance(m), 1_000);
+    }
     assert_eq!(f.token.balance(c), 1_000);
     assert_eq!(f.token.balance(&f.client.address), 0);
 }
